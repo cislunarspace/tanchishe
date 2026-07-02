@@ -286,6 +286,7 @@ fn spawn_button(parent: &mut ChildBuilder, font: &Handle<Font>, text: &str, butt
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                TextLayout::new_with_justify(JustifyText::Center),
             ));
         });
 }
@@ -315,12 +316,13 @@ fn spawn_mute_button(parent: &mut ChildBuilder, font: &Handle<Font>, muted: bool
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                TextLayout::new_with_justify(JustifyText::Center),
                 MuteButtonText,
             ));
         });
 }
 
-/// 生成一段文字标签
+/// 生成一段居中的文字标签
 fn spawn_label(parent: &mut ChildBuilder, font: &Handle<Font>, text: &str, font_size: f32) {
     parent.spawn((
         Text::new(text),
@@ -330,6 +332,7 @@ fn spawn_label(parent: &mut ChildBuilder, font: &Handle<Font>, text: &str, font_
             ..default()
         },
         TextColor(Color::srgb(1.0, 1.0, 1.0)),
+        TextLayout::new_with_justify(JustifyText::Center),
     ));
 }
 
@@ -514,6 +517,7 @@ fn setup_game(
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                TextLayout::new_with_justify(JustifyText::Center),
                 ScoreText,
             ));
             parent.spawn((
@@ -524,6 +528,7 @@ fn setup_game(
                     ..default()
                 },
                 TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                TextLayout::new_with_justify(JustifyText::Center),
                 HighScoreText,
             ));
         });
