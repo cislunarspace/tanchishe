@@ -19,11 +19,14 @@ impl GridPosition {
         Self { x, y }
     }
 
-    /// 转换为世界坐标（格点中心）
+    /// 转换为世界坐标（格点中心）。
+    ///
+    /// 网格坐标原点为左上角、y 向下增长，而 Bevy 世界坐标 y 向上增长，
+    /// 因此这里将 y 轴翻转，使视觉方向与网格方向一致。
     pub fn to_world(&self) -> Vec2 {
         Vec2::new(
             self.x as f32 * CELL_SIZE + CELL_SIZE / 2.0,
-            self.y as f32 * CELL_SIZE + CELL_SIZE / 2.0,
+            (GRID_HEIGHT - 1 - self.y) as f32 * CELL_SIZE + CELL_SIZE / 2.0,
         )
     }
 }
@@ -74,7 +77,10 @@ mod tests {
         let pos = GridPosition::new(0, 0);
         let world = pos.to_world();
         assert!((world.x - 12.0).abs() < f32::EPSILON);
-        assert!((world.y - 12.0).abs() < f32::EPSILON);
+        // 左上角对应世界坐标最上方
+        assert!(
+            (world.y - (GRID_HEIGHT as f32 * CELL_SIZE - CELL_SIZE / 2.0)).abs() < f32::EPSILON
+        );
     }
 
     #[test]
@@ -82,7 +88,8 @@ mod tests {
         let pos = GridPosition::new(5, 3);
         let world = pos.to_world();
         assert!((world.x - 132.0).abs() < f32::EPSILON);
-        assert!((world.y - 84.0).abs() < f32::EPSILON);
+        // y 轴已翻转：(GRID_HEIGHT - 1 - 3) * CELL_SIZE + CELL_SIZE / 2
+        assert!((world.y - 396.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -108,6 +115,17 @@ mod tests {
         assert_eq!(Direction::Down.apply(&pos), GridPosition::new(5, 6));
         assert_eq!(Direction::Left.apply(&pos), GridPosition::new(4, 5));
         assert_eq!(Direction::Right.apply(&pos), GridPosition::new(6, 5));
+    }
+
+    /// 方向与世界坐标的视觉一致性：向上移动应使世界 y 增大（屏幕上方）。
+    #[test]
+    fn test_moving_up_increases_world_y() {
+        let pos = GridPosition::new(5, 5);
+        let up = Direction::Up.apply(&pos);
+        assert!(up.to_world().y > pos.to_world().y);
+
+        let down = Direction::Down.apply(&pos);
+        assert!(down.to_world().y < pos.to_world().y);
     }
 
     #[test]
