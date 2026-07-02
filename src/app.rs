@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
+use crate::ai;
 use crate::audio::{mute_button_text, DeathEvent, FoodEaten, GameAudioPlugin, MuteButtonText};
 use crate::food::{spawn_food, Food};
 use crate::game::{step, step_interval, Difficulty, Score};
@@ -21,6 +22,7 @@ const FONT_PATH: &str = "fonts/NotoSansSC-Regular.ttf";
 #[derive(Component, Clone, Copy, Debug)]
 pub enum UiButton {
     Start,
+    AutoPlay,
     DifficultySlow,
     DifficultyMedium,
     DifficultyFast,
@@ -88,6 +90,10 @@ pub struct GameRng(pub StdRng);
 #[derive(Resource, Default)]
 pub struct ResetOnEnter(pub bool);
 
+/// 是否由自动玩家（哈密顿回路 AI）控制蛇
+#[derive(Resource, Default)]
+pub struct AutoPlayMode(pub bool);
+
 /// 死亡动画计时器
 #[derive(Resource)]
 pub struct DeathAnimationTimer(pub Timer);
@@ -110,6 +116,11 @@ const HOVERED_BUTTON: Color = Color::srgb(0.35, 0.35, 0.35);
 /// 条件：当前处于测试模式
 fn is_testing(testing: Res<IsTesting>) -> bool {
     testing.0
+}
+
+/// 条件：自动玩家已开启
+fn autoplay_enabled(autoplay: Res<AutoPlayMode>) -> bool {
+    autoplay.0
 }
 const SELECTED_BUTTON: Color = Color::srgb(0.25, 0.45, 0.25);
 const BORDER_COLOR: Color = Color::srgb(0.5, 0.5, 0.5);
@@ -163,6 +174,7 @@ pub fn build_app(testing: bool) -> App {
         .insert_resource(GameRng(StdRng::from_entropy()))
         .insert_resource(input::InputQueue::default())
         .insert_resource(ResetOnEnter::default())
+        .insert_resource(AutoPlayMode::default())
         .insert_resource(GameOverReason::default())
         .insert_resource(DeathAnimationTimer(Timer::new(
             Duration::from_secs_f32(0.3),
@@ -215,10 +227,13 @@ pub fn build_app(testing: bool) -> App {
                 button_hover.run_if(in_state(AppState::Menu)),
                 playing_input.run_if(in_state(AppState::Playing)),
                 handle_input
-                    .run_if(in_state(AppState::Playing))
+                    .run_if(in_state(AppState::Playing).and(not(autoplay_enabled)))
                     .before(apply_input_queue),
                 apply_input_queue
-                    .run_if(in_state(AppState::Playing))
+                    .run_if(in_state(AppState::Playing).and(not(autoplay_enabled)))
+                    .before(move_snake),
+                ai_control_system
+                    .run_if(in_state(AppState::Playing).and(autoplay_enabled))
                     .before(move_snake),
                 move_snake.run_if(in_state(AppState::Playing)),
                 sync_snake_entities.run_if(in_state(AppState::Playing).and(not(is_testing))),
@@ -373,6 +388,7 @@ fn setup_menu(
         .with_children(|parent| {
             spawn_label(parent, &font, "贪吃蛇", 64.0);
             spawn_button(parent, &font, "开始游戏", UiButton::Start);
+            spawn_button(parent, &font, "自动通关 (A)", UiButton::AutoPlay);
             spawn_label(parent, &font, "选择难度（1/2/3）", 24.0);
             parent
                 .spawn((Node {
@@ -674,6 +690,7 @@ fn menu_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut difficulty: ResMut<Difficulty>,
     mut reset: ResMut<ResetOnEnter>,
+    mut autoplay: ResMut<AutoPlayMode>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     if keys.just_pressed(KeyCode::Digit1) {
@@ -686,6 +703,13 @@ fn menu_input(
         *difficulty = Difficulty::Fast;
     }
     if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) {
+        autoplay.0 = false;
+        reset.0 = true;
+        next_state.set(AppState::Playing);
+    }
+    if keys.just_pressed(KeyCode::KeyA) {
+        autoplay.0 = true;
+        *difficulty = Difficulty::Fast;
         reset.0 = true;
         next_state.set(AppState::Playing);
     }
@@ -696,6 +720,7 @@ fn menu_button_interaction(
     mut interactions: Query<(&Interaction, &UiButton), Changed<Interaction>>,
     mut difficulty: ResMut<Difficulty>,
     mut reset: ResMut<ResetOnEnter>,
+    mut autoplay: ResMut<AutoPlayMode>,
     mut next_state: ResMut<NextState<AppState>>,
     mut muted: ResMut<crate::audio::AudioMuted>,
     mut mute_text: Query<&mut Text, With<MuteButtonText>>,
@@ -706,6 +731,13 @@ fn menu_button_interaction(
         }
         match button {
             UiButton::Start => {
+                autoplay.0 = false;
+                reset.0 = true;
+                next_state.set(AppState::Playing);
+            }
+            UiButton::AutoPlay => {
+                autoplay.0 = true;
+                *difficulty = Difficulty::Fast;
                 reset.0 = true;
                 next_state.set(AppState::Playing);
             }
@@ -872,6 +904,13 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut queue: ResMut<input::InputQ
 /// 从输入队列中取出一个有效方向应用到蛇
 fn apply_input_queue(mut queue: ResMut<input::InputQueue>, mut snake: ResMut<snake::Snake>) {
     input::apply_input_queue(&mut queue, &mut snake);
+}
+
+/// 自动玩家：根据哈密顿回路决定蛇的下一步方向
+fn ai_control_system(mut snake: ResMut<snake::Snake>) {
+    if let Some(&head) = snake.body.front() {
+        snake.next_direction = ai::next_direction(head);
+    }
 }
 
 /// 定时移动蛇
@@ -1250,6 +1289,57 @@ mod tests {
             .0
             .set_elapsed(Duration::from_secs_f32(0.299));
         update_until_stable(&mut app, AppState::GameOver, 10);
+    }
+
+    /// 自动通关模式默认关闭。
+    #[test]
+    fn test_autoplay_mode_defaults_to_false() {
+        let mut app = build_app(true);
+        app.update();
+        assert!(!app.world().resource::<AutoPlayMode>().0);
+    }
+
+    /// 主菜单按 A 键启动自动通关，难度为 Fast 并进入 Playing。
+    #[test]
+    fn test_autoplay_key_a_starts_game() {
+        use bevy::input::keyboard::{Key, KeyboardInput};
+        use bevy::input::ButtonState;
+
+        let mut app = build_app(true);
+        app.update();
+
+        let window = Entity::from_raw(1);
+        {
+            let mut events = app.world_mut().resource_mut::<Events<KeyboardInput>>();
+            events.send(KeyboardInput {
+                key_code: KeyCode::KeyA,
+                logical_key: Key::Character("a".into()),
+                state: ButtonState::Pressed,
+                window,
+                repeat: false,
+            });
+        }
+        update_until_stable(&mut app, AppState::Playing, 5);
+
+        assert!(app.world().resource::<AutoPlayMode>().0);
+        assert_eq!(*app.world().resource::<Difficulty>(), Difficulty::Fast);
+        assert!(app.world().resource::<ResetOnEnter>().0);
+    }
+
+    /// 自动玩家开启时，AI 控制系统会按哈密顿回路设置蛇的 next_direction。
+    #[test]
+    fn test_ai_control_system_sets_direction() {
+        let mut app = build_app(true);
+        app.world_mut().resource_mut::<ResetOnEnter>().0 = true;
+        app.world_mut().resource_mut::<AutoPlayMode>().0 = true;
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Playing);
+        update_until_stable(&mut app, AppState::Playing, 5);
+
+        let snake = app.world().resource::<snake::Snake>();
+        let head = *snake.body.front().unwrap();
+        assert_eq!(snake.next_direction, ai::next_direction(head));
     }
 
     /// Ctrl+M 切换全局静音状态。
