@@ -1,11 +1,14 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use bevy::prelude::{App, Events, NextState, State};
+use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::ButtonState;
+use bevy::prelude::{App, Entity, Events, KeyCode, NextState, State};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use tanchishe::app::{build_app, ResetOnEnter, StepTimer};
+use tanchishe::ai;
+use tanchishe::app::{build_app, AutoPlayMode, ResetOnEnter, StepTimer};
 use tanchishe::audio::{DeathEvent, FoodEaten};
 use tanchishe::food::{spawn_food, Food};
 use tanchishe::game::{step, Score};
@@ -333,4 +336,83 @@ fn test_death_event_is_sent() {
     let death_events = app.world().resource::<Events<DeathEvent>>();
     let mut reader = death_events.get_cursor();
     assert_eq!(reader.read(death_events).count(), 1);
+}
+
+/// 自动玩家端到端：主菜单按 A 启动自动通关，推进足够帧数后进入 Victory，
+/// 且蛇身占满棋盘、分数为吃满棋盘所得。
+#[test]
+fn autoplay_reaches_victory() {
+    let mut app = build_app(true);
+    app.update();
+    assert_eq!(
+        app.world().resource::<State<AppState>>().get(),
+        &AppState::Menu
+    );
+
+    // 主菜单按 A 键启动自动通关（Fast 难度）。
+    let window = Entity::from_raw(1);
+    {
+        let mut events = app.world_mut().resource_mut::<Events<KeyboardInput>>();
+        events.send(KeyboardInput {
+            key_code: KeyCode::KeyA,
+            logical_key: Key::Character("a".into()),
+            state: ButtonState::Pressed,
+            window,
+            repeat: false,
+        });
+    }
+    update_until_stable(&mut app, AppState::Playing, 10);
+    assert!(app.world().resource::<AutoPlayMode>().0);
+
+    // 缩短步进间隔，使测试在可接受时间内推进约 600 步。
+    // 注意：吃到食物后 move_snake 会按当前速度重设间隔，因此每帧按当前
+    // duration 设置 elapsed，确保计时器在本帧必然触发。
+    app.world_mut()
+        .resource_mut::<StepTimer>()
+        .0
+        .set_duration(Duration::from_secs_f32(0.001));
+
+    let max_frames = 1000;
+    for _ in 0..max_frames {
+        // 为了让自动玩家在有限帧数内必然胜利，每帧把食物放到 AI 下一步要去的格子。
+        // 这样自动玩家每步都吃并持续增长，仍然走哈密顿回路，最终占满棋盘触发胜利。
+        {
+            let snake = app.world().resource::<Snake>();
+            if let Some(&head) = snake.body.front() {
+                let next_pos = ai::next_direction(head).apply(&head);
+                app.world_mut().resource_mut::<Food>().position = next_pos;
+            }
+        }
+        {
+            let duration = app.world().resource::<StepTimer>().0.duration();
+            app.world_mut()
+                .resource_mut::<StepTimer>()
+                .0
+                .set_elapsed(duration - Duration::from_nanos(1));
+        }
+        app.update();
+        if *app.world().resource::<State<AppState>>().get() == AppState::Victory {
+            break;
+        }
+    }
+
+    assert_eq!(
+        app.world().resource::<State<AppState>>().get(),
+        &AppState::Victory,
+        "自动玩家应在 {max_frames} 帧内进入 Victory"
+    );
+
+    let snake = app.world().resource::<Snake>();
+    let score = app.world().resource::<Score>();
+    let expected_cells = (GRID_WIDTH * GRID_HEIGHT) as usize;
+    assert_eq!(
+        snake.body.len(),
+        expected_cells,
+        "胜利时蛇身应占满 {GRID_WIDTH}×{GRID_HEIGHT} 棋盘"
+    );
+    assert_eq!(
+        score.value,
+        (expected_cells - 3) as u32 * 10,
+        "胜利时分数应为吃满棋盘所得"
+    );
 }
